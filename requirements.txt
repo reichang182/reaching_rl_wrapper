@@ -1,0 +1,22 @@
+# Core dependencies
+gymnasium>=0.29.0
+stable-baselines3>=2.0.0
+numpy>=1.24.0
+torch>=2.0.0
+
+# Experiment tracking
+wandb>=0.15.0
+
+# Configuration
+pyyaml>=6.0
+
+# Optional dependencies for video rendering
+# pyvirtualdisplay  # Uncomment if running on headless systems
+
+# Optional dependencies for LLM optimizer
+# langchain>=0.1.0
+# langchain-google-genai>=0.0.5
+# weave  # For LLM experiment tracking
+
+# Note: Ensure co_design_task is available in your Python path
+# Note: NVIDIA Warp should be installed separately if not already available
