@@ -1,18 +1,19 @@
-import gymnasium as gym
-from gymnasium.wrappers import TimeLimit
-from stable_baselines3 import SAC, PPO
-from stable_baselines3.common.evaluation import evaluate_policy
-from wandb.integration.sb3 import WandbCallback
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import EvalCallback, BaseCallback
-import wandb
-import numpy as np
-from envs.ik_gym_wrapper import InverseKinematicsEnv
 import argparse
 import os
-import torch
-import warp as wp
 import sys
+
+import numpy as np
+import torch
+import wandb
+import warp as wp
+from gymnasium.wrappers import TimeLimit
+from stable_baselines3 import PPO, SAC
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.monitor import Monitor
+from wandb.integration.sb3 import WandbCallback
+
+from envs.ik_gym_wrapper import InverseKinematicsEnv
 
 # Add parent directory to path to import from envs
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,55 +21,86 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # For video rendering (optional - will skip if not available)
 try:
     from pyvirtualdisplay import Display
+
     PYVIRTUALDISPLAY_AVAILABLE = True
 except ImportError:
     PYVIRTUALDISPLAY_AVAILABLE = False
     print("Warning: pyvirtualdisplay not available. Video rendering may fail on headless systems.")
 
+
 # Custom Callback for logging episode-end metrics
 class EpisodeEndMetricsLogger(BaseCallback):
     def __init__(self, verbose=0):
-        super(EpisodeEndMetricsLogger, self).__init__(verbose)
+        super().__init__(verbose)
 
     def _on_step(self) -> bool:
         # Check if any environment is done
-        if self.locals['dones'][0]:  # For a single environment
-            info = self.locals['infos'][0]
-            
+        if self.locals["dones"][0]:  # For a single environment
+            info = self.locals["infos"][0]
+
             # Log all available metrics
-            if 'distance_to_target' in info:
-                wandb.log({'train/final_distance_to_target': info['distance_to_target']}, step=self.num_timesteps)
-            if 'is_success' in info:
-                wandb.log({'train/is_success': float(info['is_success'])}, step=self.num_timesteps)
-            if 'machine_cost' in info:
-                wandb.log({'train/machine_cost': info['machine_cost']}, step=self.num_timesteps)
-            if 'smoothness_penalty' in info:
-                wandb.log({'train/smoothness_penalty': info['smoothness_penalty']}, step=self.num_timesteps)
-                
+            if "distance_to_target" in info:
+                wandb.log(
+                    {"train/final_distance_to_target": info["distance_to_target"]},
+                    step=self.num_timesteps,
+                )
+            if "is_success" in info:
+                wandb.log({"train/is_success": float(info["is_success"])}, step=self.num_timesteps)
+            if "machine_cost" in info:
+                wandb.log({"train/machine_cost": info["machine_cost"]}, step=self.num_timesteps)
+            if "smoothness_penalty" in info:
+                wandb.log(
+                    {"train/smoothness_penalty": info["smoothness_penalty"]},
+                    step=self.num_timesteps,
+                )
+
             if self.verbose > 0:
-                print(f"Episode ended at timestep {self.num_timesteps}: distance={info.get('distance_to_target', 'N/A'):.4f}, success={info.get('is_success', False)}")
+                print(
+                    f"Episode ended at timestep {self.num_timesteps}: distance={info.get('distance_to_target', 'N/A'):.4f}, success={info.get('is_success', False)}"
+                )
         return True
+
 
 # Initialize ArgumentParser
 parser = argparse.ArgumentParser(description="Train RL agent for inverse kinematics task.")
-parser.add_argument("--algorithm", type=str, default="SAC", choices=["SAC", "PPO"], help="RL algorithm to use")
+parser.add_argument(
+    "--algorithm", type=str, default="SAC", choices=["SAC", "PPO"], help="RL algorithm to use"
+)
 parser.add_argument("--dof", type=int, default=3, help="Degrees of freedom for the robot")
 parser.add_argument("--num_targets", type=int, default=1, help="Number of targets")
-parser.add_argument("--enable_obstacles", action="store_true", help="Enable obstacles in the environment")
+parser.add_argument(
+    "--enable_obstacles", action="store_true", help="Enable obstacles in the environment"
+)
 parser.add_argument("--num_obstacles", type=int, default=0, help="Number of obstacles")
-parser.add_argument("--total-timesteps", type=int, default=1000000, help="Total number of training timesteps")
-parser.add_argument("--eval-freq", type=int, default=10000, help="Frequency of evaluation during training")
-parser.add_argument("--n-eval-episodes", type=int, default=10, help="Number of episodes for evaluation")
+parser.add_argument(
+    "--total-timesteps", type=int, default=1000000, help="Total number of training timesteps"
+)
+parser.add_argument(
+    "--eval-freq", type=int, default=10000, help="Frequency of evaluation during training"
+)
+parser.add_argument(
+    "--n-eval-episodes", type=int, default=10, help="Number of episodes for evaluation"
+)
 parser.add_argument("--test-episodes", type=int, default=5, help="Number of episodes for testing")
 parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
 parser.add_argument("--fps", type=int, default=30, help="FPS for environment simulation")
 parser.add_argument("--max_episode_steps", type=int, default=200, help="Maximum steps per episode")
-parser.add_argument("--target_threshold", type=float, default=0.03, help="Distance threshold for success")
+parser.add_argument(
+    "--target_threshold", type=float, default=0.03, help="Distance threshold for success"
+)
 parser.add_argument("--collision_penalty", type=float, default=1.0, help="Penalty for collisions")
-parser.add_argument("--machine_cost_weight", type=float, default=0.01, help="Weight for machine cost in reward")
-parser.add_argument("--terminate_on_collision", action="store_true", help="Terminate episode on collision")
-parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate for the RL algorithm")
-parser.add_argument("--batch_size", type=int, default=256, help="Batch size for training (SAC only)")
+parser.add_argument(
+    "--machine_cost_weight", type=float, default=0.01, help="Weight for machine cost in reward"
+)
+parser.add_argument(
+    "--terminate_on_collision", action="store_true", help="Terminate episode on collision"
+)
+parser.add_argument(
+    "--learning_rate", type=float, default=3e-4, help="Learning rate for the RL algorithm"
+)
+parser.add_argument(
+    "--batch_size", type=int, default=256, help="Batch size for training (SAC only)"
+)
 parser.add_argument("--stage_path", type=str, default=".", help="Path to stage directory")
 
 args = parser.parse_args()
@@ -97,6 +129,7 @@ os.makedirs(base_output_dir, exist_ok=True)
 # Initialize wandb
 wandb.init(project="inverse-kinematics-rl", name=exp_name, sync_tensorboard=True, config=vars(args))
 
+
 # Create environment function
 def make_env(seed_val):
     env = InverseKinematicsEnv(
@@ -117,6 +150,7 @@ def make_env(seed_val):
     env = Monitor(env)
     return env
 
+
 # Create training and evaluation environments
 env = make_env(args.seed)
 eval_env = make_env(args.seed + 1)
@@ -127,22 +161,22 @@ model_log_path = base_output_dir
 
 if args.algorithm == "SAC":
     model = SAC(
-        "MlpPolicy", 
-        env, 
-        verbose=1, 
+        "MlpPolicy",
+        env,
+        verbose=1,
         tensorboard_log=model_log_path,
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
-        seed=args.seed
+        seed=args.seed,
     )
 elif args.algorithm == "PPO":
     model = PPO(
-        "MlpPolicy", 
-        env, 
-        verbose=1, 
+        "MlpPolicy",
+        env,
+        verbose=1,
         tensorboard_log=model_log_path,
         learning_rate=args.learning_rate,
-        seed=args.seed
+        seed=args.seed,
     )
 else:
     raise ValueError(f"Unsupported algorithm: {args.algorithm}")
@@ -162,7 +196,7 @@ eval_callback = EvalCallback(
     n_eval_episodes=args.n_eval_episodes,
     deterministic=True,
     render=False,
-    verbose=1
+    verbose=1,
 )
 
 episode_metrics_logger = EpisodeEndMetricsLogger(verbose=0)
@@ -172,7 +206,7 @@ print(f"\nStarting training for {args.total_timesteps} timesteps...")
 model.learn(
     total_timesteps=args.total_timesteps,
     callback=[wandb_callback, eval_callback, episode_metrics_logger],
-    progress_bar=True
+    progress_bar=True,
 )
 
 # Save final model
@@ -182,9 +216,17 @@ print(f"Final model saved to {base_output_dir}/models/{exp_name}_final.zip")
 
 # Evaluate the model
 print(f"\nEvaluating {args.algorithm} agent...")
-mean_reward, std_reward = evaluate_policy(model, eval_env, n_eval_episodes=args.n_eval_episodes, deterministic=True)
-wandb.log({f"{args.algorithm.lower()}_eval_mean_reward": mean_reward, f"{args.algorithm.lower()}_eval_std_reward": std_reward})
+mean_reward, std_reward = evaluate_policy(
+    model, eval_env, n_eval_episodes=args.n_eval_episodes, deterministic=True
+)
+wandb.log(
+    {
+        f"{args.algorithm.lower()}_eval_mean_reward": mean_reward,
+        f"{args.algorithm.lower()}_eval_std_reward": std_reward,
+    }
+)
 print(f"{args.algorithm} Evaluation Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+
 
 # Test the trained model
 def test_agent(model_to_test, test_env, num_episodes, base_seed):
@@ -192,28 +234,30 @@ def test_agent(model_to_test, test_env, num_episodes, base_seed):
     rewards = []
     successes = []
     final_distances = []
-    
+
     for episode in range(num_episodes):
         episode_seed = base_seed + 10000 + episode
         obs, info = test_env.reset(seed=episode_seed)
-        
+
         done = False
         truncated = False
         episode_reward = 0
         num_steps = 0
-        
+
         while not (done or truncated):
             action, _ = model_to_test.predict(obs, deterministic=True)
             obs, reward, done, truncated, info = test_env.step(action)
             episode_reward += reward
             num_steps += 1
-        
+
         rewards.append(episode_reward)
-        successes.append(float(info.get('is_success', False)))
-        final_distances.append(info.get('distance_to_target', float('inf')))
-        
-        print(f"Test Episode {episode+1}: Reward = {episode_reward:.2f}, Steps = {num_steps}, Success = {info.get('is_success', False)}, Distance = {info.get('distance_to_target', 'N/A'):.4f}")
-    
+        successes.append(float(info.get("is_success", False)))
+        final_distances.append(info.get("distance_to_target", float("inf")))
+
+        print(
+            f"Test Episode {episode+1}: Reward = {episode_reward:.2f}, Steps = {num_steps}, Success = {info.get('is_success', False)}, Distance = {info.get('distance_to_target', 'N/A'):.4f}"
+        )
+
     # Log test results
     test_results = {
         f"{args.algorithm.lower()}_test_avg_reward": np.mean(rewards),
@@ -221,13 +265,14 @@ def test_agent(model_to_test, test_env, num_episodes, base_seed):
         f"{args.algorithm.lower()}_test_avg_final_distance": np.mean(final_distances),
     }
     wandb.log(test_results)
-    
+
     return test_results
+
 
 if args.test_episodes > 0:
     print(f"\nTesting {args.algorithm} agent for {args.test_episodes} episodes...")
     test_env = make_env(args.seed + 2)
-    
+
     # Start virtual display if available and needed
     display = None
     if PYVIRTUALDISPLAY_AVAILABLE:
@@ -237,16 +282,18 @@ if args.test_episodes > 0:
             print("Virtual display started for rendering.")
         except Exception as e:
             print(f"Could not start virtual display: {e}")
-    
+
     test_results = test_agent(model, test_env, args.test_episodes, args.seed)
-    
-    print(f"\nTest Results:")
+
+    print("\nTest Results:")
     print(f"Average Reward: {test_results[f'{args.algorithm.lower()}_test_avg_reward']:.2f}")
     print(f"Success Rate: {test_results[f'{args.algorithm.lower()}_test_success_rate']:.2%}")
-    print(f"Average Final Distance: {test_results[f'{args.algorithm.lower()}_test_avg_final_distance']:.4f}")
-    
+    print(
+        f"Average Final Distance: {test_results[f'{args.algorithm.lower()}_test_avg_final_distance']:.4f}"
+    )
+
     test_env.close()
-    
+
     if display:
         try:
             display.stop()
