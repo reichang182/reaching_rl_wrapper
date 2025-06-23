@@ -22,6 +22,8 @@ from gymnasium import spaces
 class InverseKinematicsEnv(gymnasium.Env):
     """Gymnasium wrapper for the InverseKinematicsTask from co_design_task."""
 
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+
     def __init__(
         self,
         random_seed=0,
@@ -119,6 +121,13 @@ class InverseKinematicsEnv(gymnasium.Env):
         self.current_step = 0
         self.prev_distance = None
 
+        # Warn about multi-environment limitation
+        if self.num_envs > 1:
+            print(
+                f"Warning: Created with {self.num_envs} environments but currently only first environment is used"
+            )
+            self.num_envs = 1  # Force single environment for now
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
@@ -150,11 +159,17 @@ class InverseKinematicsEnv(gymnasium.Env):
         # For multiple targets, repeat the action
         joint_poses_all = np.tile(action, self.config["task"]["number_of_targets"])
 
-        # Set joint poses in the task's feature_states
-        self.task.feature_states["joint_poses"].numpy()[:] = joint_poses_all
+        # Set joint poses in the task's feature_states using proper Warp GPU memory handling
+        wp.copy(
+            self.task.feature_states["joint_poses"],
+            wp.from_numpy(
+                joint_poses_all.astype(np.float32),
+                device=self.task.feature_states["joint_poses"].device,
+            ),
+        )
 
         # Step the task
-        feature_states_dict = self.task.step()
+        self.task.step()
 
         # Get observation
         obs = self._get_observation()
@@ -194,6 +209,17 @@ class InverseKinematicsEnv(gymnasium.Env):
     def _get_observation(self):
         """Extract observation from task feature states."""
         feature_states = self.task.get_feature_states()
+
+        # Validate required feature states exist
+        required_features = [
+            "joint_poses",
+            "link_lengths",
+            "end_effector_position",
+            "target_position",
+        ]
+        for feature in required_features:
+            if feature not in feature_states:
+                raise KeyError(f"Required feature '{feature}' not found in task feature_states")
 
         # Get states for first environment (convert to numpy for indexing)
         joint_poses = feature_states["joint_poses"].numpy()[: self.dof]
