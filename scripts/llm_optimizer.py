@@ -154,7 +154,8 @@ def evaluate_configuration(
     num_targets: int,
 ) -> Tuple[float, Dict[str, float]]:
     """Evaluate a single configuration and return (loss, metrics).
-    Config format: [j1, j2, ..., jn, l1, l2, ..., ln] where j=joint angles, l=link lengths
+
+    Config format: [j1, j2, ..., jn, l1, l2, ..., ln] where j=joint angles, l=link lengths.
     """
     if len(config) != 2 * dof:
         print(f"Warning: Invalid configuration length {len(config)}, expected {2*dof}")
@@ -174,11 +175,26 @@ def evaluate_configuration(
         # Set link lengths by modifying the feature states
         feature_states = task.get_feature_states()
         if "link_lengths" in feature_states:
-            task.feature_states["link_lengths"].numpy()[:dof] = link_lengths
+            # Use Warp's copy function to update GPU memory
+            # Create a full array matching the device array size
+            full_link_lengths = task.feature_states["link_lengths"].numpy().copy()
+            full_link_lengths[:dof] = link_lengths
+            wp.copy(
+                task.feature_states["link_lengths"],
+                wp.from_numpy(
+                    full_link_lengths.astype(np.float32),
+                    device=task.feature_states["link_lengths"].device,
+                ),
+            )
 
         # Apply joint angles (repeat for each target if multiple)
         joint_poses_all = np.tile(joint_angles, num_targets)
-        task.feature_states["joint_poses"].numpy()[:] = joint_poses_all
+        wp.copy(
+            task.feature_states["joint_poses"],
+            wp.from_numpy(
+                joint_poses_all.astype(np.float32), device=task.feature_states["joint_poses"].device
+            ),
+        )
 
         # Step the task
         feature_states = task.step()
@@ -256,7 +272,7 @@ def parse_llm_response(response_content: str, dof: int, num_configs: int) -> Lis
             configs = ast.literal_eval(response_content)
             if isinstance(configs, list):
                 return configs[:num_configs]
-        except:
+        except Exception:
             pass
         return []
 
@@ -332,7 +348,9 @@ def main():
         llm = DummyLLM()
 
     # Create prompt template
-    system_prompt = f"""You are an expert robotics engineer optimizing a {args.dof}-DOF robot arm for inverse kinematics.
+    system_prompt = (
+        f"""You are an expert robotics engineer optimizing a {args.dof}-DOF robot arm """
+        """for inverse kinematics.
 
 Task: Find joint angles and link lengths that position the end-effector at the target(s).
 
@@ -348,6 +366,7 @@ Target positions: {target_positions.tolist()}
 
 Respond with EXACTLY {args.configs_per_iteration} configurations as a JSON list of lists.
 Example: [[0.5, -0.3, 1.2, 0.15, 0.2, 0.15], [0.6, -0.2, 1.0, 0.1, 0.25, 0.2]]"""
+    )
 
     if LANGCHAIN_AVAILABLE:
         prompt_template = ChatPromptTemplate.from_messages(
@@ -373,6 +392,7 @@ Example: [[0.5, -0.3, 1.2, 0.15, 0.2, 0.15], [0.6, -0.2, 1.0, 0.1, 0.25, 0.2]]""
     best_metrics = {}
 
     session_id = f"session_{args.seed}"
+    evaluated_configs = []  # Initialize list to store evaluated configurations
 
     for iteration in range(args.iterations):
         print(f"\n--- Iteration {iteration + 1}/{args.iterations} ---")
@@ -402,7 +422,8 @@ Example: [[0.5, -0.3, 1.2, 0.15, 0.2, 0.15], [0.6, -0.2, 1.0, 0.1, 0.25, 0.2]]""
             evaluated_configs.append(metrics)
 
             print(
-                f"  Config {i+1}: Loss={loss:.4f}, Distance={metrics.get('avg_distance', 'N/A'):.4f}"
+                f"  Config {i+1}: Loss={loss:.4f}, "
+                f"Distance={metrics.get('avg_distance', 'N/A'):.4f}"
             )
 
             # Track best configuration

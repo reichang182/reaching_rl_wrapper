@@ -34,9 +34,10 @@ SWEEP_CONFIG = {}
 
 
 def evaluate_ik_config():
-    """This function is called by wandb.agent.
-    It initializes an InverseKinematicsTask with parameters from wandb.config,
-    evaluates the static configuration, and logs results.
+    """Evaluate inverse kinematics configuration for W&B sweep.
+
+    Called by wandb.agent, initializes InverseKinematicsTask with parameters
+    from wandb.config, evaluates static configuration, and logs results.
     """
     dof = SWEEP_CONFIG["dof"]
     num_targets = SWEEP_CONFIG["num_targets"]
@@ -131,11 +132,17 @@ def evaluate_ik_config():
         # Set link lengths (if the task supports it)
         feature_states = task.get_feature_states()
         if "link_lengths" in feature_states:
-            # Override the default link lengths
-            task.feature_states["link_lengths"].numpy()[:] = link_lengths
+            # Override the default link lengths using Warp's copy function
+            wp.copy(
+                task.feature_states["link_lengths"],
+                wp.from_numpy(link_lengths, device=task.feature_states["link_lengths"].device),
+            )
 
-        # Set joint angles in the task
-        task.feature_states["joint_poses"].numpy()[:] = joint_angles
+        # Set joint angles in the task using Warp's copy function
+        wp.copy(
+            task.feature_states["joint_poses"],
+            wp.from_numpy(joint_angles, device=task.feature_states["joint_poses"].device),
+        )
 
         # Step the task
         feature_states = task.step()

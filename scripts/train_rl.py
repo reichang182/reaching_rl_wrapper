@@ -30,6 +30,8 @@ except ImportError:
 
 # Custom Callback for logging episode-end metrics
 class EpisodeEndMetricsLogger(BaseCallback):
+    """Custom callback for logging episode-end metrics."""
+
     def __init__(self, verbose=0):
         super().__init__(verbose)
 
@@ -56,7 +58,9 @@ class EpisodeEndMetricsLogger(BaseCallback):
 
             if self.verbose > 0:
                 print(
-                    f"Episode ended at timestep {self.num_timesteps}: distance={info.get('distance_to_target', 'N/A'):.4f}, success={info.get('is_success', False)}"
+                    f"Episode ended at timestep {self.num_timesteps}: "
+                    f"distance={info.get('distance_to_target', 'N/A'):.4f}, "
+                    f"success={info.get('is_success', False)}"
                 )
         return True
 
@@ -86,11 +90,11 @@ parser.add_argument("--seed", type=int, default=None, help="Random seed for repr
 parser.add_argument("--fps", type=int, default=30, help="FPS for environment simulation")
 parser.add_argument("--max_episode_steps", type=int, default=200, help="Maximum steps per episode")
 parser.add_argument(
-    "--target_threshold", type=float, default=0.03, help="Distance threshold for success"
+    "--target_threshold", type=float, default=0.05, help="Distance threshold for success"
 )
 parser.add_argument("--collision_penalty", type=float, default=1.0, help="Penalty for collisions")
 parser.add_argument(
-    "--machine_cost_weight", type=float, default=0.01, help="Weight for machine cost in reward"
+    "--machine_cost_weight", type=float, default=0.0001, help="Weight for machine cost in reward"
 )
 parser.add_argument(
     "--terminate_on_collision", action="store_true", help="Terminate episode on collision"
@@ -170,12 +174,22 @@ if args.algorithm == "SAC":
         seed=args.seed,
     )
 elif args.algorithm == "PPO":
+    # PPO with larger network
+    policy_kwargs = {"net_arch": [{"pi": [256, 256], "vf": [256, 256]}]}
     model = PPO(
         "MlpPolicy",
         env,
         verbose=1,
         tensorboard_log=model_log_path,
         learning_rate=args.learning_rate,
+        n_steps=2048,
+        batch_size=64,
+        n_epochs=10,
+        gamma=0.99,
+        gae_lambda=0.95,
+        clip_range=0.2,
+        ent_coef=0.01,
+        policy_kwargs=policy_kwargs,
         seed=args.seed,
     )
 else:
@@ -255,7 +269,9 @@ def test_agent(model_to_test, test_env, num_episodes, base_seed):
         final_distances.append(info.get("distance_to_target", float("inf")))
 
         print(
-            f"Test Episode {episode+1}: Reward = {episode_reward:.2f}, Steps = {num_steps}, Success = {info.get('is_success', False)}, Distance = {info.get('distance_to_target', 'N/A'):.4f}"
+            f"Test Episode {episode+1}: Reward = {episode_reward:.2f}, "
+            f"Steps = {num_steps}, Success = {info.get('is_success', False)}, "
+            f"Distance = {info.get('distance_to_target', 'N/A'):.4f}"
         )
 
     # Log test results
@@ -289,7 +305,8 @@ if args.test_episodes > 0:
     print(f"Average Reward: {test_results[f'{args.algorithm.lower()}_test_avg_reward']:.2f}")
     print(f"Success Rate: {test_results[f'{args.algorithm.lower()}_test_success_rate']:.2%}")
     print(
-        f"Average Final Distance: {test_results[f'{args.algorithm.lower()}_test_avg_final_distance']:.4f}"
+        f"Average Final Distance: "
+        f"{test_results[f'{args.algorithm.lower()}_test_avg_final_distance']:.4f}"
     )
 
     test_env.close()
