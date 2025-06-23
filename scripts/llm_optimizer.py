@@ -1,4 +1,5 @@
 """LLM-based optimizer for InverseKinematicsTask morphology optimization.
+
 Uses an LLM to propose robot configurations and iteratively refine them based on task performance.
 """
 
@@ -9,8 +10,6 @@ import os
 import sys
 from typing import Dict, List, Tuple
 
-import numpy as np
-
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,6 +17,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
+
+import numpy as np
+import torch
+import warp as wp
 
 # Import from co_design_task
 from co_design_task.context.inverse_kinematics_context_manager import (
@@ -36,9 +39,6 @@ try:
 except ImportError:
     LANGCHAIN_AVAILABLE = False
     print("Warning: LangChain not available. Using dummy LLM for demonstration.")
-
-import torch
-import warp as wp
 
 # Try to import weave for experiment tracking (optional)
 try:

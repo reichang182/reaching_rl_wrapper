@@ -1,4 +1,4 @@
-"""Default configuration values for InverseKinematicsTask"""
+"""Default configuration values for InverseKinematicsTask."""
 
 import numpy as np
 

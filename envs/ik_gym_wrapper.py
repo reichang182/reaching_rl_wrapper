@@ -1,22 +1,22 @@
 import os
 import sys
 
-import gymnasium
-import numpy as np
-import warp as wp
-import warp.sim
-import warp.sim.render
-from gymnasium import spaces
-
 # Add co_design_task to path
 parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
+import gymnasium
+import numpy as np
+import warp as wp
+import warp.sim
+import warp.sim.render
+
 # Import from co_design_task package
 from co_design_task.context.inverse_kinematics_context_manager import (
     InverseKinematicsContextManager,
 )
+from gymnasium import spaces
 
 
 class InverseKinematicsEnv(gymnasium.Env):
