@@ -1,0 +1,94 @@
+env:
+  name: Transform2ActIKEnv
+  max_episode_steps: 100
+
+  # IK task specific
+  min_links: 2
+  max_links: 5
+  init_links: 3
+  base_link_length: 0.2
+  link_length_range: [0.1, 0.5]
+  joint_limit_range: [-3.14159, 3.14159]
+
+  # Target configuration
+  target_sampling: uniform
+  target_threshold: 0.1  # Increased threshold for easier success initially
+  workspace_bounds: [-0.3, 0.3]  # Smaller workspace for easier reaching
+
+  # Reward weights
+  distance_weight: 1.0
+  success_bonus: 10.0
+  collision_penalty: 5.0
+  machine_cost_weight: 0.01
+  smoothness_weight: 0.1
+
+  # Environment options
+  terminate_on_collision: false
+  use_graph: true
+
+  # Transform2Act specific
+  transform_freq: 0.1  # Probability of allowing transformations each episode
+  attr_transform_scale: 0.05  # Step size for attribute changes
+
+agent:
+  name: Transform2ActAgent
+
+  # PPO hyperparameters
+  lr: 3e-4
+  clip_range: 0.2
+  n_steps: 2048
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+
+  # Network architecture
+  hidden_sizes: [256, 256]
+  activation: tanh
+
+  # Transform2Act specific
+  skeleton_transform_freq: 0.1
+  attribute_transform_scale: 0.05
+
+  # Exploration
+  exploration_steps: 100000
+  final_exploration: 0.1
+
+  # GNN parameters
+  gnn_type: simple  # Can be 'simple' or 'full'
+  gnn_hidden_size: 128
+  gnn_num_layers: 3
+
+training:
+  total_timesteps: 500000  # Extended training
+  eval_freq: 25000  # Evaluate every 25k steps
+  n_eval_episodes: 10
+  save_freq: 50000  # Save checkpoint every 50k steps
+  log_interval: 5000  # Log every 5k steps
+
+  # Curriculum learning
+  curriculum:
+    enabled: true
+    stages:
+      - name: "fixed_morphology"
+        steps: 100000
+        skeleton_transform: false
+        attribute_transform: false
+      - name: "attribute_only"
+        steps: 200000
+        skeleton_transform: false
+        attribute_transform: true
+      - name: "full_transform"
+        steps: remaining
+        skeleton_transform: true
+        attribute_transform: true
+
+  # Wandb configuration
+  use_wandb: true  # Enable WandB logging
+  wandb_project: "transform2act-ik"
+  wandb_entity: null
+
+  # Checkpoint and logging
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
+  video_freq: 10000  # Generate video every N steps
