@@ -24,6 +24,14 @@ class InverseKinematicsEnv(gymnasium.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
+    # Observation normalization bounds
+    OBS_BOUNDS = {
+        "joint_poses": (-np.pi, np.pi),
+        "link_lengths": (0.05, 0.3),
+        "positions": (-1.0, 1.0),  # workspace bounds
+        "distance": (0.0, 2.0),  # max expected distance
+    }
+
     def __init__(
         self,
         random_seed=0,
@@ -41,9 +49,9 @@ class InverseKinematicsEnv(gymnasium.Env):
         end_effector_sphere_radius=0.02,
         max_episode_steps=200,
         terminate_on_collision=False,
-        collision_penalty=1.0,
-        target_threshold=0.03,
-        machine_cost_weight=0.01,
+        collision_penalty=10.0,
+        target_threshold=0.05,
+        machine_cost_weight=0.0,
         enable_obstacles=False,
         number_of_obstacles=0,
     ):
@@ -191,7 +199,7 @@ class InverseKinematicsEnv(gymnasium.Env):
         # Check success
         distance = info["distance_to_target"]
         if distance < self.target_threshold:
-            reward += 10.0  # Success bonus
+            reward += 50.0  # Large success bonus
             terminated = True
             info["is_success"] = True
         else:
@@ -231,9 +239,24 @@ class InverseKinematicsEnv(gymnasium.Env):
         relative_pos = target_pos - ee_pos
         distance = np.linalg.norm(relative_pos)
 
-        # Concatenate all observations
+        # Normalize observations for stable learning
+        norm_joint_poses = joint_poses / np.pi  # [-1, 1]
+        norm_link_lengths = (link_lengths - 0.175) / 0.125  # Normalize around mean
+        norm_ee_pos = np.clip(ee_pos / 0.5, -2.0, 2.0)  # Workspace normalization
+        norm_target_pos = np.clip(target_pos / 0.5, -2.0, 2.0)
+        norm_relative_pos = np.clip(relative_pos / 0.5, -2.0, 2.0)
+        norm_distance = np.clip(distance / 0.5, 0.0, 2.0)  # Normalized distance
+
+        # Concatenate normalized observations
         obs = np.concatenate(
-            [joint_poses, link_lengths, ee_pos, target_pos, relative_pos, [distance]]
+            [
+                norm_joint_poses,
+                norm_link_lengths,
+                norm_ee_pos,
+                norm_target_pos,
+                norm_relative_pos,
+                [norm_distance],
+            ]
         )
 
         return obs.astype(np.float32)
@@ -245,20 +268,26 @@ class InverseKinematicsEnv(gymnasium.Env):
         # Get states for first environment (convert to numpy for indexing)
         ee_pos = feature_states["end_effector_position"].numpy()[0]
         target_pos = feature_states["target_position"].numpy()[0]
-        link_lengths = feature_states["link_lengths"].numpy()[: self.dof]
 
-        # Distance reward (primary objective)
+        # Distance reward with better shaping
         distance = np.linalg.norm(ee_pos - target_pos)
-        reward = -distance
 
-        # Progress reward (optional)
+        # Exponential distance reward for better guidance near target
+        if distance < 0.2:  # Within 20cm
+            # Strong exponential reward when close
+            reward = 1.0 - distance * 5.0  # Range: [0, 1] at 20cm to 0cm
+        else:
+            # Moderate negative reward when far
+            reward = -2.0 - distance  # Capped negative reward
+
+        # Progress reward (increased weight)
         if self.prev_distance is not None:
             progress = self.prev_distance - distance
-            reward += 0.1 * progress  # Small progress bonus
+            reward += 5.0 * progress  # Significant progress bonus
 
-        # Machine cost penalty
+        # Machine cost penalty - disabled for initial training
+        # Can be re-enabled once basic reaching is learned
         machine_cost = feature_states["machine_cost"].numpy()[0]
-        reward -= self.machine_cost_weight * machine_cost
 
         # Collision penalty
         if "collisions" in feature_states:
@@ -266,10 +295,9 @@ class InverseKinematicsEnv(gymnasium.Env):
             if collision_count > 0:
                 reward -= self.collision_penalty * float(collision_count)
 
-        # Link smoothness penalty - encourage gradual transitions
-        link_diff = np.diff(link_lengths)
-        smoothness_penalty = np.sum(link_diff**2) * 0.1
-        reward -= smoothness_penalty
+        # Velocity penalty for smoother movements (if available)
+        # Currently disabled - can add joint velocity tracking later
+        smoothness_penalty = 0.0
 
         info = {
             "distance_to_target": distance,

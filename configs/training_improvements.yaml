@@ -1,0 +1,52 @@
+# Optimized Training Configuration for Inverse Kinematics RL
+
+# Key improvements implemented:
+# 1. Better reward shaping with exponential distance reward
+# 2. Observation normalization for stable learning
+# 3. Increased success bonus (50.0 vs 10.0)
+# 4. Larger networks and optimized hyperparameters
+# 5. Disabled machine cost penalty during initial training
+
+# Recommended SAC hyperparameters
+sac_config:
+  learning_rate: 1.0e-3  # Higher LR for faster convergence
+  batch_size: 512        # Larger batch for stability
+  buffer_size: 1000000
+  network_arch: [512, 512, 256]  # Larger networks
+  tau: 0.005
+  gamma: 0.99
+  ent_coef: "auto"      # Automatic entropy tuning
+  learning_starts: 1000  # Initial exploration phase
+
+# Recommended PPO hyperparameters
+ppo_config:
+  learning_rate: 3.0e-4
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 20          # More gradient updates
+  network_arch:
+    pi: [512, 512, 256]
+    vf: [512, 512, 256]
+  gamma: 0.99
+  gae_lambda: 0.95
+  ent_coef: 0.01
+  max_grad_norm: 0.5    # Gradient clipping
+
+# Environment configuration
+env_config:
+  target_threshold: 0.05  # 5cm success threshold
+  collision_penalty: 10.0 # Strong collision penalty
+  machine_cost_weight: 0.0  # Disabled initially
+
+# Training configuration
+training_config:
+  total_timesteps: 1000000  # Minimum for good performance
+  eval_freq: 10000
+  n_eval_episodes: 20
+
+# Expected performance milestones:
+# - 10k steps: ~10% success rate
+# - 50k steps: ~30% success rate
+# - 100k steps: ~60% success rate
+# - 500k steps: ~90% success rate
+# - 1M steps: 95%+ success rate

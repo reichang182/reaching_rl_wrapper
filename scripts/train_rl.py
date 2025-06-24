@@ -77,7 +77,7 @@ parser.add_argument(
 )
 parser.add_argument("--num_obstacles", type=int, default=0, help="Number of obstacles")
 parser.add_argument(
-    "--total-timesteps", type=int, default=1000000, help="Total number of training timesteps"
+    "--total-timesteps", type=int, default=2000000, help="Total number of training timesteps"
 )
 parser.add_argument(
     "--eval-freq", type=int, default=10000, help="Frequency of evaluation during training"
