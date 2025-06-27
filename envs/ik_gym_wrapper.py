@@ -19,6 +19,25 @@ from co_design_task.context.inverse_kinematics_context_manager import (
 from gymnasium import spaces
 
 
+@wp.kernel
+def broadcast_joint_poses_kernel(
+    dest_joint_poses: wp.array(dtype=wp.float32),
+    src_action: wp.array(dtype=wp.float32),  # shape (dof,)
+    num_envs: int,
+    num_targets: int,
+    dof: int,
+):
+    # This kernel is launched with dim=(num_envs * num_targets)
+    # Each thread handles one robot
+    tid = wp.tid()
+    env_idx = tid // num_targets
+    target_idx = tid % num_targets
+
+    for dof_idx in range(dof):
+        dest_idx = env_idx * num_targets * dof + target_idx * dof + dof_idx
+        dest_joint_poses[dest_idx] = src_action[dof_idx]
+
+
 class InverseKinematicsEnv(gymnasium.Env):
     """Gymnasium wrapper for the InverseKinematicsTask from co_design_task."""
 
@@ -53,16 +72,18 @@ class InverseKinematicsEnv(gymnasium.Env):
         target_threshold=0.05,
         machine_cost_weight=0.0,
         enable_obstacles=False,
-        number_of_obstacles=0,
+        number_of_collision_objects=0,
     ):
         super().__init__()
+
+        self.device = "cuda:0" if wp.get_cuda_device_count() > 0 else "cpu"
 
         # Build config dict for InverseKinematicsContextManager
         self.config = {
             "general": {
                 "stage_path": stage_path,
                 "random_seed": random_seed,
-                "device": "cuda:0" if wp.get_cuda_device_count() > 0 else "cpu",
+                "device": self.device,
             },
             "simulation": {
                 "integrator_type": integrator_type,
@@ -82,7 +103,7 @@ class InverseKinematicsEnv(gymnasium.Env):
                 "default_link_radius": default_link_radius,
                 "end_effector_sphere_radius": end_effector_sphere_radius,
                 "enable_obstacles": enable_obstacles,
-                "number_of_obstacles": number_of_obstacles,
+                "number_of_collision_objects": number_of_collision_objects,
                 "requires_grad": False,  # Not needed for RL
                 "rigid_contact_margin": 0.01,
                 "target_lower_bounds": [-0.5, 0.0, -0.5],
@@ -97,6 +118,14 @@ class InverseKinematicsEnv(gymnasium.Env):
                 "link_length_static_values": [default_link_length] * dof,
                 "collision": True,
                 "collision_weight": 1.0,
+                # Fixes from review
+                "add_joint_shapes": True,
+                "collision_object_lower_bounds": [-0.3, 0.1, -0.3],
+                "collision_object_upper_bounds": [0.3, 0.4, 0.3],
+                "collision_object_shared_random_position": False,
+                "static_dh_parameters": [],
+                "link_length_lower_bounds": [0.05] * dof,
+                "link_length_upper_bounds": [0.3] * dof,
             },
         }
 
@@ -110,6 +139,11 @@ class InverseKinematicsEnv(gymnasium.Env):
 
         # Create the task using the context manager
         self.task = InverseKinematicsContextManager.create(self.config)
+
+        # GPU buffers for actions
+        num_actions = self.num_envs * self.config["task"]["number_of_targets"] * self.dof
+        self._joint_pose_gpu = wp.zeros(num_actions, dtype=wp.float32, device=self.device)
+        self._action_gpu = wp.empty(self.dof, dtype=wp.float32, device=self.device)
 
         # Define action space: joint angles
         # InverseKinematicsTask expects joint poses as actions
@@ -161,20 +195,23 @@ class InverseKinematicsEnv(gymnasium.Env):
         # Clip action to be within the defined action space
         action = np.clip(action, self.action_space.low, self.action_space.high)
 
-        # Apply action to the task
-        # InverseKinematicsTask expects joint poses to be set in feature_states
-        # For single target, just use the action directly
-        # For multiple targets, repeat the action
-        joint_poses_all = np.tile(action, self.config["task"]["number_of_targets"])
-
-        # Set joint poses in the task's feature_states using proper Warp GPU memory handling
-        wp.copy(
-            self.task.feature_states["joint_poses"],
-            wp.from_numpy(
-                joint_poses_all.astype(np.float32),
-                device=self.task.feature_states["joint_poses"].device,
-            ),
+        # Copy action to GPU and broadcast to all environments/targets via a kernel
+        wp.copy(self._action_gpu, wp.from_numpy(action.astype(np.float32), device=self.device))
+        wp.launch(
+            kernel=broadcast_joint_poses_kernel,
+            dim=self.num_envs * self.config["task"]["number_of_targets"],
+            inputs=[
+                self._joint_pose_gpu,
+                self._action_gpu,
+                self.num_envs,
+                self.config["task"]["number_of_targets"],
+                self.dof,
+            ],
+            device=self.device,
         )
+
+        # Set joint poses in the task's feature_states
+        wp.copy(self.task.feature_states["joint_poses"], self._joint_pose_gpu)
 
         # Step the task
         self.task.step()
@@ -277,8 +314,8 @@ class InverseKinematicsEnv(gymnasium.Env):
             # Strong exponential reward when close
             reward = 1.0 - distance * 5.0  # Range: [0, 1] at 20cm to 0cm
         else:
-            # Moderate negative reward when far
-            reward = -2.0 - distance  # Capped negative reward
+            # Linear decay, continuous with the exponential part
+            reward = 0.2 - distance
 
         # Progress reward (increased weight)
         if self.prev_distance is not None:
