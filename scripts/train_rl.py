@@ -81,10 +81,10 @@ parser.add_argument(
 )
 parser.add_argument("--num_obstacles", type=int, default=0, help="Number of obstacles")
 parser.add_argument(
-    "--total-timesteps", type=int, default=1200000, help="Total number of training timesteps"
+    "--total-timesteps", type=int, default=2000000, help="Total number of training timesteps"
 )
 parser.add_argument(
-    "--eval-freq", type=int, default=10000, help="Frequency of evaluation during training"
+    "--eval-freq", type=int, default=20000, help="Frequency of evaluation during training"
 )
 parser.add_argument(
     "--n-eval-episodes", type=int, default=10, help="Number of episodes for evaluation"
@@ -117,6 +117,7 @@ parser.add_argument(
 
 def main():
     args = parser.parse_args()
+    args.eval_freq = args.eval_freq // args.num_envs
 
     # Handle seeding
     if args.seed is None:
