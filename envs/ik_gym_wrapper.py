@@ -19,6 +19,52 @@ from co_design_task.context.inverse_kinematics_context_manager import (
 from gymnasium import spaces
 
 
+def make_dh_table(dof: int, link_length: float) -> list[list[float]]:
+    """Produce a DH list of length `dof`.
+
+    Pattern:                    a (twist)
+      0 : yaw  (planar)            0
+      1 : pitch (gives height)     π/2
+      2 : elbow                    0
+      3 : roll                     π/2
+      4 : pitch                    0
+      …  then alternate  π/2 / 0
+    This keeps successive joint axes orthogonal so the
+    arm never collapses back into a plane.
+    """
+    dh = []
+    twists = [0.0, np.pi / 2]  # repeat this pattern
+    for i in range(dof):
+        alpha = twists[i % 2]
+        dh.append([0.0, 0.0, link_length, alpha])
+    return dh
+
+
+def configure_task_dict(
+    cfg: dict,
+    dof: int,
+    link_length: float,
+    link_length_low: float,
+    link_length_high: float,
+) -> None:
+    """Configure DOF-dependent parameters in the task dictionary."""
+    cfg["task"].update(
+        {
+            "static_dh_parameters": make_dh_table(dof, link_length),
+            "joint_pose_lower_bounds": [-np.pi] * dof,
+            "joint_pose_upper_bounds": [np.pi] * dof,
+            "link_length_static_values": [link_length] * dof,
+            "link_length_lower_bounds": [link_length_low] * dof,
+            "link_length_upper_bounds": [link_length_high] * dof,
+        }
+    )
+    reach = dof * link_length
+    h_min = cfg["task"]["robot_base_height"]
+    h_max = h_min + reach
+    cfg["task"]["target_lower_bounds"] = [-reach, h_min, -reach]
+    cfg["task"]["target_upper_bounds"] = [reach, h_max, reach]
+
+
 class InverseKinematicsEnv(gymnasium.Env):
     """Gymnasium wrapper for the InverseKinematicsTask from co_design_task."""
 
@@ -59,6 +105,9 @@ class InverseKinematicsEnv(gymnasium.Env):
     ):
         super().__init__()
 
+        if dof < 3:
+            raise ValueError("dof must be ≥ 3 to reach arbitrary 3-D points")
+
         self.device = "cuda:0" if wp.get_cuda_device_count() > 0 else "cpu"
 
         # Build config dict for InverseKinematicsContextManager
@@ -89,16 +138,11 @@ class InverseKinematicsEnv(gymnasium.Env):
                 "number_of_collision_objects": number_of_collision_objects,
                 "requires_grad": False,  # Not needed for RL
                 "rigid_contact_margin": 0.01,
-                "target_lower_bounds": [-0.5, 0.0, -0.5],
-                "target_upper_bounds": [0.5, 0.5, 0.5],
                 "joint_reset_lower": -np.pi,
                 "joint_reset_upper": np.pi,
                 # Additional required parameters
                 "target_shared_random_position": False,
-                "joint_pose_lower_bounds": [-np.pi] * dof,
-                "joint_pose_upper_bounds": [np.pi] * dof,
                 "link_length_reset_handler": "static",
-                "link_length_static_values": [default_link_length] * dof,
                 "collision": False,
                 "collision_weight": 1.0,
                 # Fixes from review
@@ -106,22 +150,13 @@ class InverseKinematicsEnv(gymnasium.Env):
                 "collision_object_lower_bounds": [-0.5, 0.0, -0.5],
                 "collision_object_upper_bounds": [0.5, 0.3, 0.5],
                 "collision_object_shared_random_position": False,
-                "static_dh_parameters": [[0.0, 0.0, default_link_length, 0.0]] * dof,
-                "link_length_lower_bounds": [0.05] * dof,
-                "link_length_upper_bounds": [0.3] * dof,
             },
         }
 
-        # B. Give the robot a height degree of freedom (full 3-D)
-        # 1. Twist one joint in the DH-table so subsequent links can leave the plane:
-        link_length = self.config["task"]["default_link_length"]
-        self.config["task"]["static_dh_parameters"] = [
-            [0.0, 0.0, link_length, 0.0],  # Joint 0 - yaw
-            [0.0, 0.0, link_length, np.pi / 2],  # Joint 1 - pitch (90° twist provides elevation)
-            [0.0, 0.0, link_length, 0.0],  # Joint 2 - elbow
-        ]
-        # 2. Bump `target_lower_bounds[1]` so the robot doesn't have to hit the table:
-        self.config["task"]["target_lower_bounds"][1] = 0.05
+        # Configure DOF-dependent parameters
+        configure_task_dict(
+            self.config, dof, default_link_length, link_length_low, link_length_high
+        )
 
         self.max_episode_steps = max_episode_steps
         self.terminate_on_collision = terminate_on_collision
@@ -130,8 +165,6 @@ class InverseKinematicsEnv(gymnasium.Env):
         self.machine_cost_weight = machine_cost_weight
         self.dof = dof
         self.num_envs = num_envs
-        self.link_length_low = link_length_low
-        self.link_length_high = link_length_high
 
         # Create the task using the context manager
         self.task = InverseKinematicsContextManager.create(self.config)
@@ -155,9 +188,7 @@ class InverseKinematicsEnv(gymnasium.Env):
 
         # Define observation space
         # Observation includes: [joint_poses, dh_r, ee_pos, target_pos, relative_pos, distance]
-        obs_dim = (
-            dof + dof + 3 + 3 + 3 + 1
-        )  # joint_poses + dh_r + ee_pos + target_pos + relative_pos + distance
+        obs_dim = dof * 2 + 10  # joint_poses + dh_r + ee_pos + target_pos + relative_pos + distance
         obs_low = -1e5 * np.ones(obs_dim, dtype=np.float32)
         obs_high = 1e5 * np.ones(obs_dim, dtype=np.float32)
         self.observation_space = spaces.Box(obs_low, obs_high, dtype=np.float32)
@@ -275,8 +306,14 @@ class InverseKinematicsEnv(gymnasium.Env):
         norm_joint_poses = joint_poses / np.pi  # [-1, 1]
 
         # Dynamic normalization for link lengths
-        mean_len = (self.link_length_high + self.link_length_low) / 2.0
-        half_range_len = (self.link_length_high - self.link_length_low) / 2.0
+        mean_len = (
+            self.config["task"]["link_length_upper_bounds"][0]
+            + self.config["task"]["link_length_lower_bounds"][0]
+        ) / 2.0
+        half_range_len = (
+            self.config["task"]["link_length_upper_bounds"][0]
+            - self.config["task"]["link_length_lower_bounds"][0]
+        ) / 2.0
         norm_link_lengths = (link_lengths - mean_len) / half_range_len
 
         norm_ee_pos = np.clip(ee_pos / 0.5, -2.0, 2.0)  # Workspace normalization
