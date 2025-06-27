@@ -92,7 +92,7 @@ parser.add_argument("--max_episode_steps", type=int, default=200, help="Maximum 
 parser.add_argument(
     "--target_threshold", type=float, default=0.05, help="Distance threshold for success"
 )
-parser.add_argument("--collision_penalty", type=float, default=1.0, help="Penalty for collisions")
+parser.add_argument("--collision_penalty", type=float, default=0, help="Penalty for collisions")
 parser.add_argument(
     "--machine_cost_weight", type=float, default=0.0001, help="Weight for machine cost in reward"
 )
@@ -147,7 +147,7 @@ def make_env(seed_val):
         target_threshold=args.target_threshold,
         machine_cost_weight=args.machine_cost_weight,
         enable_obstacles=args.enable_obstacles,
-        number_of_obstacles=args.num_obstacles,
+        number_of_collision_objects=args.num_obstacles,
         stage_path=args.stage_path,
     )
     env = TimeLimit(env, max_episode_steps=args.max_episode_steps)

@@ -19,25 +19,6 @@ from co_design_task.context.inverse_kinematics_context_manager import (
 from gymnasium import spaces
 
 
-@wp.kernel
-def broadcast_joint_poses_kernel(
-    dest_joint_poses: wp.array(dtype=wp.float32),
-    src_action: wp.array(dtype=wp.float32),  # shape (dof,)
-    num_envs: int,
-    num_targets: int,
-    dof: int,
-):
-    # This kernel is launched with dim=(num_envs * num_targets)
-    # Each thread handles one robot
-    tid = wp.tid()
-    env_idx = tid // num_targets
-    target_idx = tid % num_targets
-
-    for dof_idx in range(dof):
-        dest_idx = env_idx * num_targets * dof + target_idx * dof + dof_idx
-        dest_joint_poses[dest_idx] = src_action[dof_idx]
-
-
 class InverseKinematicsEnv(gymnasium.Env):
     """Gymnasium wrapper for the InverseKinematicsTask from co_design_task."""
 
@@ -46,7 +27,7 @@ class InverseKinematicsEnv(gymnasium.Env):
     # Observation normalization bounds
     OBS_BOUNDS = {
         "joint_poses": (-np.pi, np.pi),
-        "link_lengths": (0.05, 0.3),
+        "dh_r": (0.05, 0.3),
         "positions": (-1.0, 1.0),  # workspace bounds
         "distance": (0.0, 2.0),  # max expected distance
     }
@@ -68,11 +49,13 @@ class InverseKinematicsEnv(gymnasium.Env):
         end_effector_sphere_radius=0.02,
         max_episode_steps=200,
         terminate_on_collision=False,
-        collision_penalty=10.0,
-        target_threshold=0.05,
+        collision_penalty=0,
+        target_threshold=0.01,
         machine_cost_weight=0.0,
         enable_obstacles=False,
         number_of_collision_objects=0,
+        link_length_low=0.01,
+        link_length_high=0.30,
     ):
         super().__init__()
 
@@ -116,14 +99,14 @@ class InverseKinematicsEnv(gymnasium.Env):
                 "joint_pose_upper_bounds": [np.pi] * dof,
                 "link_length_reset_handler": "static",
                 "link_length_static_values": [default_link_length] * dof,
-                "collision": True,
+                "collision": False,
                 "collision_weight": 1.0,
                 # Fixes from review
-                "add_joint_shapes": True,
-                "collision_object_lower_bounds": [-0.3, 0.1, -0.3],
-                "collision_object_upper_bounds": [0.3, 0.4, 0.3],
+                "add_joint_shapes": False,  # visual only
+                "collision_object_lower_bounds": [-0.5, 0.0, -0.5],
+                "collision_object_upper_bounds": [0.5, 0.5, 0.5],
                 "collision_object_shared_random_position": False,
-                "static_dh_parameters": [],
+                "static_dh_parameters": [[0.0, 0.0, default_link_length, 0.0]] * dof,
                 "link_length_lower_bounds": [0.05] * dof,
                 "link_length_upper_bounds": [0.3] * dof,
             },
@@ -136,31 +119,38 @@ class InverseKinematicsEnv(gymnasium.Env):
         self.machine_cost_weight = machine_cost_weight
         self.dof = dof
         self.num_envs = num_envs
+        self.link_length_low = link_length_low
+        self.link_length_high = link_length_high
 
         # Create the task using the context manager
         self.task = InverseKinematicsContextManager.create(self.config)
+        assert "dh_r" in self.task.feature_states, (
+            "InverseKinematicsTask did not initialise correctly; "
+            "check that the task-config is complete."
+        )
 
-        # GPU buffers for actions
-        num_actions = self.num_envs * self.config["task"]["number_of_targets"] * self.dof
-        self._joint_pose_gpu = wp.zeros(num_actions, dtype=wp.float32, device=self.device)
-        self._action_gpu = wp.empty(self.dof, dtype=wp.float32, device=self.device)
+        # Define action space: joint angles + link lengths
+        angle_low = -np.pi * np.ones(dof, dtype=np.float32)
+        angle_high = np.pi * np.ones(dof, dtype=np.float32)
 
-        # Define action space: joint angles
-        # InverseKinematicsTask expects joint poses as actions
-        action_low = -np.pi * np.ones(dof, dtype=np.float32)
-        action_high = np.pi * np.ones(dof, dtype=np.float32)
-        self.action_space = spaces.Box(low=action_low, high=action_high, dtype=np.float32)
+        length_low = link_length_low * np.ones(dof, dtype=np.float32)
+        length_high = link_length_high * np.ones(dof, dtype=np.float32)
+
+        self.action_space = spaces.Box(
+            low=np.concatenate([angle_low, length_low]),
+            high=np.concatenate([angle_high, length_high]),
+            dtype=np.float32,
+        )
 
         # Define observation space
-        # Observation includes: [joint_poses, link_lengths, ee_pos, target_pos, relative_pos, distance]
+        # Observation includes: [joint_poses, dh_r, ee_pos, target_pos, relative_pos, distance]
         obs_dim = (
             dof + dof + 3 + 3 + 3 + 1
-        )  # joint_poses + link_lengths + ee_pos + target_pos + relative_pos + distance
+        )  # joint_poses + dh_r + ee_pos + target_pos + relative_pos + distance
         obs_low = -1e5 * np.ones(obs_dim, dtype=np.float32)
         obs_high = 1e5 * np.ones(obs_dim, dtype=np.float32)
         self.observation_space = spaces.Box(obs_low, obs_high, dtype=np.float32)
 
-        self.current_step = 0
         self.prev_distance = None
 
         # Warn about multi-environment limitation
@@ -172,7 +162,6 @@ class InverseKinematicsEnv(gymnasium.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.current_step = 0
         self.prev_distance = None
 
         # Reset the task
@@ -181,37 +170,36 @@ class InverseKinematicsEnv(gymnasium.Env):
         # Get initial observation
         obs = self._get_observation()
 
-        # Store initial distance for progress reward
-        feature_states = self.task.get_feature_states()
-        ee_pos = feature_states["end_effector_position"].numpy()[0]  # First environment
-        target_pos = feature_states["target_position"].numpy()[0]
-        self.prev_distance = np.linalg.norm(ee_pos - target_pos)
-
         return obs, {}
 
     def step(self, action):
-        self.current_step += 1
-
         # Clip action to be within the defined action space
+        action = np.asarray(action, dtype=np.float32)
         action = np.clip(action, self.action_space.low, self.action_space.high)
 
-        # Copy action to GPU and broadcast to all environments/targets via a kernel
-        wp.copy(self._action_gpu, wp.from_numpy(action.astype(np.float32), device=self.device))
-        wp.launch(
-            kernel=broadcast_joint_poses_kernel,
-            dim=self.num_envs * self.config["task"]["number_of_targets"],
-            inputs=[
-                self._joint_pose_gpu,
-                self._action_gpu,
-                self.num_envs,
-                self.config["task"]["number_of_targets"],
-                self.dof,
-            ],
-            device=self.device,
+        # Split action into angles and lengths
+        angles = action[: self.dof]
+        lengths = action[self.dof : 2 * self.dof]
+
+        # Apply angles to joint poses
+        joint_poses_all = np.tile(angles, self.config["task"]["number_of_targets"])
+        wp.copy(
+            self.task.feature_states["joint_poses"],
+            wp.from_numpy(
+                joint_poses_all.astype(np.float32),
+                device=self.task.feature_states["joint_poses"].device,
+            ),
         )
 
-        # Set joint poses in the task's feature_states
-        wp.copy(self.task.feature_states["joint_poses"], self._joint_pose_gpu)
+        # Apply lengths to DH parameters (dh_r)
+        link_lengths_all = np.tile(lengths, self.num_envs)
+        wp.copy(
+            self.task.feature_states["dh_r"],
+            wp.from_numpy(
+                link_lengths_all.astype(np.float32),
+                device=self.task.feature_states["dh_r"].device,
+            ),
+        )
 
         # Step the task
         self.task.step()
@@ -242,10 +230,6 @@ class InverseKinematicsEnv(gymnasium.Env):
         else:
             info["is_success"] = False
 
-        # Check max steps
-        if self.current_step >= self.max_episode_steps:
-            truncated = True
-
         # Update previous distance for next step
         self.prev_distance = distance
 
@@ -258,7 +242,7 @@ class InverseKinematicsEnv(gymnasium.Env):
         # Validate required feature states exist
         required_features = [
             "joint_poses",
-            "link_lengths",
+            "dh_r",
             "end_effector_position",
             "target_position",
         ]
@@ -268,7 +252,7 @@ class InverseKinematicsEnv(gymnasium.Env):
 
         # Get states for first environment (convert to numpy for indexing)
         joint_poses = feature_states["joint_poses"].numpy()[: self.dof]
-        link_lengths = feature_states["link_lengths"].numpy()[: self.dof]
+        link_lengths = feature_states["dh_r"].numpy()[: self.dof]
         ee_pos = feature_states["end_effector_position"].numpy()[0]
         target_pos = feature_states["target_position"].numpy()[0]
 
@@ -278,7 +262,12 @@ class InverseKinematicsEnv(gymnasium.Env):
 
         # Normalize observations for stable learning
         norm_joint_poses = joint_poses / np.pi  # [-1, 1]
-        norm_link_lengths = (link_lengths - 0.175) / 0.125  # Normalize around mean
+
+        # Dynamic normalization for link lengths
+        mean_len = (self.link_length_high + self.link_length_low) / 2.0
+        half_range_len = (self.link_length_high - self.link_length_low) / 2.0
+        norm_link_lengths = (link_lengths - mean_len) / half_range_len
+
         norm_ee_pos = np.clip(ee_pos / 0.5, -2.0, 2.0)  # Workspace normalization
         norm_target_pos = np.clip(target_pos / 0.5, -2.0, 2.0)
         norm_relative_pos = np.clip(relative_pos / 0.5, -2.0, 2.0)
@@ -310,36 +299,21 @@ class InverseKinematicsEnv(gymnasium.Env):
         distance = np.linalg.norm(ee_pos - target_pos)
 
         # Exponential distance reward for better guidance near target
-        if distance < 0.2:  # Within 20cm
-            # Strong exponential reward when close
-            reward = 1.0 - distance * 5.0  # Range: [0, 1] at 20cm to 0cm
-        else:
-            # Linear decay, continuous with the exponential part
-            reward = 0.2 - distance
-
-        # Progress reward (increased weight)
-        if self.prev_distance is not None:
-            progress = self.prev_distance - distance
-            reward += 5.0 * progress  # Significant progress bonus
+        reward = -distance
 
         # Machine cost penalty - disabled for initial training
         # Can be re-enabled once basic reaching is learned
         machine_cost = feature_states["machine_cost"].numpy()[0]
 
         # Collision penalty
-        if "collisions" in feature_states:
-            collision_count = np.sum(feature_states["collisions"].numpy())
-            if collision_count > 0:
-                reward -= self.collision_penalty * float(collision_count)
-
-        # Velocity penalty for smoother movements (if available)
-        # Currently disabled - can add joint velocity tracking later
-        smoothness_penalty = 0.0
+        # if "collisions" in feature_states:
+        #     collision_count = np.sum(feature_states["collisions"].numpy())
+        #     if collision_count > 0:
+        #         reward -= self.collision_penalty * float(collision_count)
 
         info = {
             "distance_to_target": distance,
             "machine_cost": machine_cost,
-            "smoothness_penalty": smoothness_penalty,
         }
 
         return reward, info
