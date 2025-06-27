@@ -112,6 +112,17 @@ class InverseKinematicsEnv(gymnasium.Env):
             },
         }
 
+        # B. Give the robot a height degree of freedom (full 3-D)
+        # 1. Twist one joint in the DH-table so subsequent links can leave the plane:
+        link_length = self.config["task"]["default_link_length"]
+        self.config["task"]["static_dh_parameters"] = [
+            [0.0, 0.0, link_length, 0.0],  # Joint 0 - yaw
+            [0.0, 0.0, link_length, np.pi / 2],  # Joint 1 - pitch (90° twist provides elevation)
+            [0.0, 0.0, link_length, 0.0],  # Joint 2 - elbow
+        ]
+        # 2. Bump `target_lower_bounds[1]` so the robot doesn't have to hit the table:
+        self.config["task"]["target_lower_bounds"][1] = 0.05
+
         self.max_episode_steps = max_episode_steps
         self.terminate_on_collision = terminate_on_collision
         self.collision_penalty = collision_penalty
