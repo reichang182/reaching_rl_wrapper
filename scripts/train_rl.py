@@ -11,6 +11,7 @@ from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import SubprocVecEnv
 from wandb.integration.sb3 import WandbCallback
 
 from envs.ik_gym_wrapper import InverseKinematicsEnv
@@ -37,31 +38,34 @@ class EpisodeEndMetricsLogger(BaseCallback):
 
     def _on_step(self) -> bool:
         # Check if any environment is done
-        if self.locals["dones"][0]:  # For a single environment
-            info = self.locals["infos"][0]
+        for i, done in enumerate(self.locals["dones"]):
+            if done:
+                info = self.locals["infos"][i]
 
-            # Log all available metrics
-            if "distance_to_target" in info:
-                wandb.log(
-                    {"train/final_distance_to_target": info["distance_to_target"]},
-                    step=self.num_timesteps,
-                )
-            if "is_success" in info:
-                wandb.log({"train/is_success": float(info["is_success"])}, step=self.num_timesteps)
-            if "machine_cost" in info:
-                wandb.log({"train/machine_cost": info["machine_cost"]}, step=self.num_timesteps)
-            if "smoothness_penalty" in info:
-                wandb.log(
-                    {"train/smoothness_penalty": info["smoothness_penalty"]},
-                    step=self.num_timesteps,
-                )
+                # Log all available metrics
+                if "distance_to_target" in info:
+                    wandb.log(
+                        {"train/final_distance_to_target": info["distance_to_target"]},
+                        step=self.num_timesteps,
+                    )
+                if "is_success" in info:
+                    wandb.log(
+                        {"train/is_success": float(info["is_success"])}, step=self.num_timesteps
+                    )
+                if "machine_cost" in info:
+                    wandb.log({"train/machine_cost": info["machine_cost"]}, step=self.num_timesteps)
+                if "smoothness_penalty" in info:
+                    wandb.log(
+                        {"train/smoothness_penalty": info["smoothness_penalty"]},
+                        step=self.num_timesteps,
+                    )
 
-            if self.verbose > 0:
-                print(
-                    f"Episode ended at timestep {self.num_timesteps}: "
-                    f"distance={info.get('distance_to_target', 'N/A'):.4f}, "
-                    f"success={info.get('is_success', False)}"
-                )
+                if self.verbose > 0:
+                    print(
+                        f"Episode ended in env {i} at timestep {self.num_timesteps}: "
+                        f"distance={info.get('distance_to_target', 'N/A'):.4f}, "
+                        f"success={info.get('is_success', False)}"
+                    )
         return True
 
 
@@ -77,7 +81,7 @@ parser.add_argument(
 )
 parser.add_argument("--num_obstacles", type=int, default=0, help="Number of obstacles")
 parser.add_argument(
-    "--total-timesteps", type=int, default=2000000, help="Total number of training timesteps"
+    "--total-timesteps", type=int, default=1200000, help="Total number of training timesteps"
 )
 parser.add_argument(
     "--eval-freq", type=int, default=10000, help="Frequency of evaluation during training"
@@ -106,221 +110,233 @@ parser.add_argument(
     "--batch_size", type=int, default=256, help="Batch size for training (SAC only)"
 )
 parser.add_argument("--stage_path", type=str, default=".", help="Path to stage directory")
-
-args = parser.parse_args()
-
-# Handle seeding
-if args.seed is None:
-    args.seed = np.random.randint(0, 1_000_000)
-print(f"Using seed: {args.seed}")
-np.random.seed(args.seed)
-torch.manual_seed(args.seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(args.seed)
-wp.rand_init(args.seed)
-
-# Experiment naming
-exp_name_parts = ["ik", args.algorithm.lower(), f"dof{args.dof}"]
-if args.enable_obstacles:
-    exp_name_parts.append(f"obs{args.num_obstacles}")
-exp_name_parts.append(f"seed{args.seed}")
-exp_name = "-".join(exp_name_parts)
-
-# Define output directory
-base_output_dir = f"./logs/{exp_name}"
-os.makedirs(base_output_dir, exist_ok=True)
-
-# Initialize wandb
-wandb.init(project="inverse-kinematics-rl", name=exp_name, sync_tensorboard=True, config=vars(args))
+parser.add_argument(
+    "--num_envs", type=int, default=64, help="Number of parallel environments for training"
+)
 
 
-# Create environment function
-def make_env(seed_val):
-    env = InverseKinematicsEnv(
-        random_seed=seed_val,
-        dof=args.dof,
-        number_of_targets=args.num_targets,
-        fps=args.fps,
-        max_episode_steps=args.max_episode_steps,
-        terminate_on_collision=args.terminate_on_collision,
-        collision_penalty=args.collision_penalty,
-        target_threshold=args.target_threshold,
-        machine_cost_weight=args.machine_cost_weight,
-        enable_obstacles=args.enable_obstacles,
-        number_of_collision_objects=args.num_obstacles,
-        stage_path=args.stage_path,
+def main():
+    args = parser.parse_args()
+
+    # Handle seeding
+    if args.seed is None:
+        args.seed = np.random.randint(0, 1_000_000)
+    print(f"Using seed: {args.seed}")
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    wp.rand_init(args.seed)
+
+    # Experiment naming
+    exp_name_parts = ["ik", args.algorithm.lower(), f"dof{args.dof}"]
+    if args.enable_obstacles:
+        exp_name_parts.append(f"obs{args.num_obstacles}")
+    exp_name_parts.append(f"seed{args.seed}")
+    exp_name = "-".join(exp_name_parts)
+
+    # Define output directory
+    base_output_dir = f"./logs/{exp_name}"
+    os.makedirs(base_output_dir, exist_ok=True)
+
+    # Initialize wandb
+    wandb.init(
+        project="inverse-kinematics-rl", name=exp_name, sync_tensorboard=True, config=vars(args)
     )
-    env = TimeLimit(env, max_episode_steps=args.max_episode_steps)
-    env = Monitor(env)
-    return env
 
+    # Create environment function
+    def make_env(seed_val):
+        env = InverseKinematicsEnv(
+            random_seed=seed_val,
+            dof=args.dof,
+            number_of_targets=args.num_targets,
+            fps=args.fps,
+            max_episode_steps=args.max_episode_steps,
+            terminate_on_collision=args.terminate_on_collision,
+            collision_penalty=args.collision_penalty,
+            target_threshold=args.target_threshold,
+            machine_cost_weight=args.machine_cost_weight,
+            enable_obstacles=args.enable_obstacles,
+            number_of_collision_objects=args.num_obstacles,
+            stage_path=args.stage_path,
+        )
+        env = TimeLimit(env, max_episode_steps=args.max_episode_steps)
+        env = Monitor(env)
+        return env
 
-# Create training and evaluation environments
-env = make_env(args.seed)
-eval_env = make_env(args.seed + 1)
+    # Create training and evaluation environments
+    if args.num_envs > 1:
+        # Important: You must use the if __name__ == '__main__': guard to use SubprocVecEnv
+        env = SubprocVecEnv([lambda i=i: make_env(args.seed + i) for i in range(args.num_envs)])
+    else:
+        env = make_env(args.seed)
 
-# Initialize model based on chosen algorithm
-print(f"Training {args.algorithm} agent...")
-model_log_path = base_output_dir
+    eval_env = make_env(args.seed + 1)
 
-if args.algorithm == "SAC":
-    model = SAC(
-        "MlpPolicy",
-        env,
+    # Initialize model based on chosen algorithm
+    print(f"Training {args.algorithm} agent...")
+    model_log_path = base_output_dir
+
+    if args.algorithm == "SAC":
+        model = SAC(
+            "MlpPolicy",
+            env,
+            verbose=1,
+            tensorboard_log=model_log_path,
+            learning_rate=args.learning_rate,
+            batch_size=args.batch_size,
+            seed=args.seed,
+        )
+    elif args.algorithm == "PPO":
+        # PPO with larger network
+        policy_kwargs = {"net_arch": [{"pi": [256, 256], "vf": [256, 256]}]}
+        model = PPO(
+            "MlpPolicy",
+            env,
+            verbose=1,
+            tensorboard_log=model_log_path,
+            learning_rate=args.learning_rate,
+            n_steps=2048,
+            batch_size=64,
+            n_epochs=10,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            ent_coef=0.01,
+            policy_kwargs=policy_kwargs,
+            seed=args.seed,
+        )
+    else:
+        raise ValueError(f"Unsupported algorithm: {args.algorithm}")
+
+    # Setup callbacks
+    wandb_callback = WandbCallback(
+        gradient_save_freq=args.eval_freq,
+        model_save_path=f"{base_output_dir}/models/wandb/",
+        verbose=2,
+    )
+
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path=f"{base_output_dir}/models/best_model/",
+        log_path=f"{base_output_dir}/eval_logs/",
+        eval_freq=args.eval_freq,
+        n_eval_episodes=args.n_eval_episodes,
+        deterministic=True,
+        render=False,
         verbose=1,
-        tensorboard_log=model_log_path,
-        learning_rate=args.learning_rate,
-        batch_size=args.batch_size,
-        seed=args.seed,
     )
-elif args.algorithm == "PPO":
-    # PPO with larger network
-    policy_kwargs = {"net_arch": [{"pi": [256, 256], "vf": [256, 256]}]}
-    model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        tensorboard_log=model_log_path,
-        learning_rate=args.learning_rate,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.01,
-        policy_kwargs=policy_kwargs,
-        seed=args.seed,
+
+    episode_metrics_logger = EpisodeEndMetricsLogger(verbose=0)
+
+    # Train the model
+    print(f"\nStarting training for {args.total_timesteps} timesteps...")
+    model.learn(
+        total_timesteps=args.total_timesteps,
+        callback=[wandb_callback, eval_callback, episode_metrics_logger],
+        progress_bar=True,
     )
-else:
-    raise ValueError(f"Unsupported algorithm: {args.algorithm}")
 
-# Setup callbacks
-wandb_callback = WandbCallback(
-    gradient_save_freq=args.eval_freq,
-    model_save_path=f"{base_output_dir}/models/wandb/",
-    verbose=2,
-)
+    # Save final model
+    os.makedirs(f"{base_output_dir}/models/", exist_ok=True)
+    model.save(f"{base_output_dir}/models/{exp_name}_final")
+    print(f"Final model saved to {base_output_dir}/models/{exp_name}_final.zip")
 
-eval_callback = EvalCallback(
-    eval_env,
-    best_model_save_path=f"{base_output_dir}/models/best_model/",
-    log_path=f"{base_output_dir}/eval_logs/",
-    eval_freq=args.eval_freq,
-    n_eval_episodes=args.n_eval_episodes,
-    deterministic=True,
-    render=False,
-    verbose=1,
-)
+    # Evaluate the model
+    print(f"\nEvaluating {args.algorithm} agent...")
+    mean_reward, std_reward = evaluate_policy(
+        model, eval_env, n_eval_episodes=args.n_eval_episodes, deterministic=True
+    )
+    wandb.log(
+        {
+            f"{args.algorithm.lower()}_eval_mean_reward": mean_reward,
+            f"{args.algorithm.lower()}_eval_std_reward": std_reward,
+        }
+    )
+    print(f"{args.algorithm} Evaluation Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
 
-episode_metrics_logger = EpisodeEndMetricsLogger(verbose=0)
+    # Test the trained model
+    def test_agent(model_to_test, test_env, num_episodes, base_seed):
+        """Test the agent and collect metrics."""
+        rewards = []
+        successes = []
+        final_distances = []
 
-# Train the model
-print(f"\nStarting training for {args.total_timesteps} timesteps...")
-model.learn(
-    total_timesteps=args.total_timesteps,
-    callback=[wandb_callback, eval_callback, episode_metrics_logger],
-    progress_bar=True,
-)
+        for episode in range(num_episodes):
+            episode_seed = base_seed + 10000 + episode
+            obs, info = test_env.reset(seed=episode_seed)
 
-# Save final model
-os.makedirs(f"{base_output_dir}/models/", exist_ok=True)
-model.save(f"{base_output_dir}/models/{exp_name}_final")
-print(f"Final model saved to {base_output_dir}/models/{exp_name}_final.zip")
+            done = False
+            truncated = False
+            episode_reward = 0
+            num_steps = 0
 
-# Evaluate the model
-print(f"\nEvaluating {args.algorithm} agent...")
-mean_reward, std_reward = evaluate_policy(
-    model, eval_env, n_eval_episodes=args.n_eval_episodes, deterministic=True
-)
-wandb.log(
-    {
-        f"{args.algorithm.lower()}_eval_mean_reward": mean_reward,
-        f"{args.algorithm.lower()}_eval_std_reward": std_reward,
-    }
-)
-print(f"{args.algorithm} Evaluation Mean reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+            while not (done or truncated):
+                action, _ = model_to_test.predict(obs, deterministic=True)
+                obs, reward, done, truncated, info = test_env.step(action)
+                episode_reward += reward
+                num_steps += 1
 
+            rewards.append(episode_reward)
+            successes.append(float(info.get("is_success", False)))
+            final_distances.append(info.get("distance_to_target", float("inf")))
 
-# Test the trained model
-def test_agent(model_to_test, test_env, num_episodes, base_seed):
-    """Test the agent and collect metrics."""
-    rewards = []
-    successes = []
-    final_distances = []
+            print(
+                f"Test Episode {episode+1}: Reward = {episode_reward:.2f}, "
+                f"Steps = {num_steps}, Success = {info.get('is_success', False)}, "
+                f"Distance = {info.get('distance_to_target', 'N/A'):.4f}"
+            )
 
-    for episode in range(num_episodes):
-        episode_seed = base_seed + 10000 + episode
-        obs, info = test_env.reset(seed=episode_seed)
+        # Log test results
+        test_results = {
+            f"{args.algorithm.lower()}_test_avg_reward": np.mean(rewards),
+            f"{args.algorithm.lower()}_test_success_rate": np.mean(successes),
+            f"{args.algorithm.lower()}_test_avg_final_distance": np.mean(final_distances),
+        }
+        wandb.log(test_results)
 
-        done = False
-        truncated = False
-        episode_reward = 0
-        num_steps = 0
+        return test_results
 
-        while not (done or truncated):
-            action, _ = model_to_test.predict(obs, deterministic=True)
-            obs, reward, done, truncated, info = test_env.step(action)
-            episode_reward += reward
-            num_steps += 1
+    if args.test_episodes > 0:
+        print(f"\nTesting {args.algorithm} agent for {args.test_episodes} episodes...")
+        test_env = make_env(args.seed + 2)
 
-        rewards.append(episode_reward)
-        successes.append(float(info.get("is_success", False)))
-        final_distances.append(info.get("distance_to_target", float("inf")))
+        # Start virtual display if available and needed
+        display = None
+        if PYVIRTUALDISPLAY_AVAILABLE:
+            try:
+                display = Display(visible=0, size=(640, 480))
+                display.start()
+                print("Virtual display started for rendering.")
+            except Exception as e:
+                print(f"Could not start virtual display: {e}")
 
+        test_results = test_agent(model, test_env, args.test_episodes, args.seed)
+
+        print("\nTest Results:")
+        print(f"Average Reward: {test_results[f'{args.algorithm.lower()}_test_avg_reward']:.2f}")
+        print(f"Success Rate: {test_results[f'{args.algorithm.lower()}_test_success_rate']:.2%}")
         print(
-            f"Test Episode {episode+1}: Reward = {episode_reward:.2f}, "
-            f"Steps = {num_steps}, Success = {info.get('is_success', False)}, "
-            f"Distance = {info.get('distance_to_target', 'N/A'):.4f}"
+            f"Average Final Distance: "
+            f"{test_results[f'{args.algorithm.lower()}_test_avg_final_distance']:.4f}"
         )
 
-    # Log test results
-    test_results = {
-        f"{args.algorithm.lower()}_test_avg_reward": np.mean(rewards),
-        f"{args.algorithm.lower()}_test_success_rate": np.mean(successes),
-        f"{args.algorithm.lower()}_test_avg_final_distance": np.mean(final_distances),
-    }
-    wandb.log(test_results)
+        test_env.close()
 
-    return test_results
+        if display:
+            try:
+                display.stop()
+                print("Virtual display stopped.")
+            except Exception as e:
+                print(f"Error stopping virtual display: {e}")
+
+    # Clean up
+    env.close()
+    eval_env.close()
+    wandb.finish()
+
+    print(f"\nTraining completed! Results saved to {base_output_dir}")
 
 
-if args.test_episodes > 0:
-    print(f"\nTesting {args.algorithm} agent for {args.test_episodes} episodes...")
-    test_env = make_env(args.seed + 2)
-
-    # Start virtual display if available and needed
-    display = None
-    if PYVIRTUALDISPLAY_AVAILABLE:
-        try:
-            display = Display(visible=0, size=(640, 480))
-            display.start()
-            print("Virtual display started for rendering.")
-        except Exception as e:
-            print(f"Could not start virtual display: {e}")
-
-    test_results = test_agent(model, test_env, args.test_episodes, args.seed)
-
-    print("\nTest Results:")
-    print(f"Average Reward: {test_results[f'{args.algorithm.lower()}_test_avg_reward']:.2f}")
-    print(f"Success Rate: {test_results[f'{args.algorithm.lower()}_test_success_rate']:.2%}")
-    print(
-        f"Average Final Distance: "
-        f"{test_results[f'{args.algorithm.lower()}_test_avg_final_distance']:.4f}"
-    )
-
-    test_env.close()
-
-    if display:
-        try:
-            display.stop()
-            print("Virtual display stopped.")
-        except Exception as e:
-            print(f"Error stopping virtual display: {e}")
-
-# Clean up
-env.close()
-eval_env.close()
-wandb.finish()
-
-print(f"\nTraining completed! Results saved to {base_output_dir}")
+if __name__ == "__main__":
+    main()

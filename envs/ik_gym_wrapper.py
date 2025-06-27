@@ -104,7 +104,7 @@ class InverseKinematicsEnv(gymnasium.Env):
                 # Fixes from review
                 "add_joint_shapes": False,  # visual only
                 "collision_object_lower_bounds": [-0.5, 0.0, -0.5],
-                "collision_object_upper_bounds": [0.5, 0.5, 0.5],
+                "collision_object_upper_bounds": [0.5, 0.3, 0.5],
                 "collision_object_shared_random_position": False,
                 "static_dh_parameters": [[0.0, 0.0, default_link_length, 0.0]] * dof,
                 "link_length_lower_bounds": [0.05] * dof,
