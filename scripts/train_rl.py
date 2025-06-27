@@ -285,7 +285,7 @@ def main():
             print(
                 f"Test Episode {episode+1}: Reward = {episode_reward:.2f}, "
                 f"Steps = {num_steps}, Success = {info.get('is_success', False)}, "
-                f"Distance = {info.get('distance_to_target', 'N/A'):.4f}"
+                f"Distance = {info.get('distance_to_target', 'N/A')}"
             )
 
         # Log test results
