@@ -245,6 +245,7 @@ class InverseKinematicsEnv(gymnasium.Env):
         )
 
         # Step the task
+        self.task.feature_states["machine_cost"].zero_()
         self.task.step()
 
         # Get observation
@@ -350,6 +351,7 @@ class InverseKinematicsEnv(gymnasium.Env):
         # Machine cost penalty - disabled for initial training
         # Can be re-enabled once basic reaching is learned
         machine_cost = feature_states["machine_cost"].numpy()[0]
+        reward -= self.machine_cost_weight * machine_cost
 
         # Collision penalty
         # if "collisions" in feature_states:

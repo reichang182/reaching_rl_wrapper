@@ -98,7 +98,7 @@ parser.add_argument(
 )
 parser.add_argument("--collision_penalty", type=float, default=0, help="Penalty for collisions")
 parser.add_argument(
-    "--machine_cost_weight", type=float, default=0.0001, help="Weight for machine cost in reward"
+    "--machine_cost_weight", type=float, default=1e-5, help="Weight for machine cost in reward"
 )
 parser.add_argument(
     "--terminate_on_collision", action="store_true", help="Terminate episode on collision"
@@ -182,6 +182,7 @@ def main():
         model = SAC(
             "MlpPolicy",
             env,
+            ent_coef=0.005,
             verbose=1,
             tensorboard_log=model_log_path,
             learning_rate=args.learning_rate,
