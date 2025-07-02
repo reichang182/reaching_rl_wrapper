@@ -380,15 +380,24 @@ def main():
     args = parser.parse_args()
     args.eval_freq = args.eval_freq // args.num_envs
 
-    # Handle seeding
+    # Handle seeding for reproducibility
     if args.seed is None:
         args.seed = np.random.randint(0, 1_000_000)
     print(f"Using seed: {args.seed}")
+
+    # Set seeds for all random number generators
+    import random
+
+    random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
     wp.rand_init(args.seed)
+
+    # Set PyTorch to deterministic mode for reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # Experiment naming
     exp_name_parts = ["ik", args.algorithm.lower(), f"dof{args.dof}"]
@@ -401,10 +410,11 @@ def main():
     base_output_dir = f"./logs/{exp_name}"
     os.makedirs(base_output_dir, exist_ok=True)
 
-    # Initialize wandb
-    wandb.init(
-        project="inverse-kinematics-rl", name=exp_name, sync_tensorboard=True, config=vars(args)
-    )
+    # Initialize wandb (allow override from environment variables)
+    wandb_project = os.environ.get("WANDB_PROJECT", "inverse-kinematics-rl")
+    wandb_run_name = os.environ.get("WANDB_RUN_NAME", exp_name)
+
+    wandb.init(project=wandb_project, name=wandb_run_name, sync_tensorboard=True, config=vars(args))
 
     # Create environment function
     def make_env(seed_val):

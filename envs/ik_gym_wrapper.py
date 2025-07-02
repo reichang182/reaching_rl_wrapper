@@ -207,6 +207,13 @@ class InverseKinematicsEnv(gymnasium.Env):
         super().reset(seed=seed)
         self.prev_distance = None
 
+        # Set seeds for reproducibility
+        if seed is not None:
+            np.random.seed(seed)
+            wp.rand_init(seed)
+            # Also set the internal config seed
+            self.config["general"]["random_seed"] = seed
+
         # Reset the task
         self.task.reset()
 
