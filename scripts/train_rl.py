@@ -453,8 +453,6 @@ def main():
         model = SAC(
             "MlpPolicy",
             env,
-            train_freq=1,
-            gradient_steps=-1,
             verbose=1,
             tensorboard_log=model_log_path,
             learning_rate=args.learning_rate,
