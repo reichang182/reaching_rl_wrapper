@@ -93,7 +93,7 @@ parser.add_argument(
 )
 parser.add_argument("--num_obstacles", type=int, default=0, help="Number of obstacles")
 parser.add_argument(
-    "--total-timesteps", type=int, default=4000000, help="Total number of training timesteps"
+    "--total-timesteps", type=int, default=1800000, help="Total number of training timesteps"
 )
 parser.add_argument(
     "--eval-freq", type=int, default=20000, help="Frequency of evaluation during training"
@@ -110,7 +110,7 @@ parser.add_argument(
 )
 parser.add_argument("--collision_penalty", type=float, default=0, help="Penalty for collisions")
 parser.add_argument(
-    "--machine_cost_weight", type=float, default=1e-2, help="Weight for machine cost in reward"
+    "--machine_cost_weight", type=float, default=1e-1, help="Weight for machine cost in reward"
 )
 parser.add_argument(
     "--terminate_on_collision", action="store_true", help="Terminate episode on collision"
