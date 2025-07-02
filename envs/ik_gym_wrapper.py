@@ -20,23 +20,14 @@ from gymnasium import spaces
 
 
 def make_dh_table(dof: int, link_length: float) -> list[list[float]]:
-    """Produce a DH list of length `dof`.
+    """Return DH parameters so every successive joint axis is orthogonal.
 
-    Pattern:                    a (twist)
-      0 : yaw  (planar)            0
-      1 : pitch (gives height)     π/2
-      2 : elbow                    0
-      3 : roll                     π/2
-      4 : pitch                    0
-      …  then alternate  π/2 / 0
-    This keeps successive joint axes orthogonal so the
-    arm never collapses back into a plane.
+    Joint 0 keeps a vertical yaw axis; all later links alternate pitch/yaw
+    automatically because a = 90° for every link.
     """
-    dh = []
-    twists = [0.0, np.pi / 2]  # repeat this pattern
-    for i in range(dof):
-        alpha = twists[i % 2]
-        dh.append([0.0, 0.0, link_length, alpha])
+    dh: list[list[float]] = []
+    for _ in range(dof):
+        dh.append([0.0, 0.0, link_length, np.pi / 2])  # [d, θ, r=a, a]
     return dh
 
 
@@ -61,8 +52,12 @@ def configure_task_dict(
     reach = dof * link_length
     h_min = cfg["task"]["robot_base_height"]
     h_max = h_min + reach
-    cfg["task"]["target_lower_bounds"] = [-reach, h_min, -reach]
-    cfg["task"]["target_upper_bounds"] = [reach, h_max, reach]
+    reach_sphere = dof * link_length_high * 0.8  # 0.9  (safe radius)
+
+    cube_half_edge = reach_sphere / np.sqrt(3)  # ≈0.52
+
+    cfg["task"]["target_lower_bounds"] = [-cube_half_edge, h_min, -cube_half_edge]
+    cfg["task"]["target_upper_bounds"] = [cube_half_edge, h_max, cube_half_edge]
 
 
 class InverseKinematicsEnv(gymnasium.Env):
