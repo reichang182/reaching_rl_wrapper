@@ -17,10 +17,10 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from wandb.integration.sb3 import WandbCallback
 
-from envs.ik_gym_wrapper import InverseKinematicsEnv
-
 # Add parent directory to path to import from envs
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from envs.ik_gym_wrapper import InverseKinematicsEnv
 
 # For video rendering (optional - will skip if not available)
 try:

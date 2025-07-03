@@ -109,7 +109,6 @@ class InverseKinematicsEnv(gymnasium.Env):
         self.config = {
             "general": {
                 "stage_path": stage_path,
-                "random_seed": random_seed,
                 "device": self.device,
             },
             "simulation": {
@@ -137,7 +136,7 @@ class InverseKinematicsEnv(gymnasium.Env):
                 "joint_reset_upper": np.pi,
                 # Additional required parameters
                 "target_shared_random_position": False,
-                "link_length_reset_handler": "static",
+                "link_length_reset_handler": "random",
                 "collision": False,
                 "collision_weight": 1.0,
                 # Fixes from review
@@ -145,6 +144,10 @@ class InverseKinematicsEnv(gymnasium.Env):
                 "collision_object_lower_bounds": [-0.5, 0.0, -0.5],
                 "collision_object_upper_bounds": [0.5, 0.3, 0.5],
                 "collision_object_shared_random_position": False,
+                "machine_cost_handler": "penalty",
+                "machine_cost_weight": 1.0,
+                "machine_cost_penalty_factor": 1.0,
+                "reaching_cost_handler": "absolute",
             },
         }
 
@@ -202,15 +205,15 @@ class InverseKinematicsEnv(gymnasium.Env):
         super().reset(seed=seed)
         self.prev_distance = None
 
-        # Set seeds for reproducibility
+        # 2) Keep Warp's own CUDA RNG in sync (optional but nice)
         if seed is not None:
-            np.random.seed(seed)
             wp.rand_init(seed)
-            # Also set the internal config seed
-            self.config["general"]["random_seed"] = seed
 
-        # Reset the task
-        self.task.reset()
+        # 3) Forward Gym's generator to the task
+        #
+        #    self.np_random is a `numpy.random.Generator` that Gym
+        #    created (or re-seeded) for us in the line above.
+        self.task.reset(rng=self.np_random)
 
         # Get initial observation
         obs = self._get_observation()
