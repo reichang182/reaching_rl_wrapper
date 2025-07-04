@@ -197,6 +197,10 @@ def add_camera_to_usd(usd_path):
         settings = UsdRender.Settings.Define(stage, settings_path)
         settings.CreateCameraRel().SetTargets([cam.GetPath()])
 
+        for p in ["/root/body_0_b0_body_0", "/root/ground"]:
+            if stage.GetPrimAtPath(p):
+                stage.RemovePrim(p)
+
         stage.Save()
         print("  Added camera, lights, and materials to USD")
         return True
@@ -205,52 +209,6 @@ def add_camera_to_usd(usd_path):
         import traceback
 
         traceback.print_exc()
-        return False
-
-
-def render_episode_state_to_image(env, image_path, resolution=(640, 480)):
-    """Render the current environment state directly to an image using warp's OpenGL renderer."""
-    try:
-        # Try to use warp's OpenGL renderer if available
-        import warp.render
-
-        # Get the underlying environment
-        while hasattr(env, "env") and not hasattr(env, "task"):
-            env = env.env
-
-        if not hasattr(env, "task"):
-            raise RuntimeError("Could not access task from environment")
-
-        # Create renderer
-        renderer = warp.render.UsdRenderer(env.task.model, env.task.stage_path)
-
-        # Set camera position
-        renderer.set_camera_position((0.0, 1.5, 2.0))
-        renderer.set_camera_look_at((0.0, 0.15, 0.0))
-
-        # Render frame
-        renderer.begin_frame(0.0)
-        renderer.render(env.task.states[0])
-
-        # Add target visualization
-        targets = env.task.targets.numpy()
-        for i in range(env.num_targets):
-            renderer.render_sphere(
-                name=f"target_{i}",
-                pos=targets[i],
-                rot=wp.quat_identity(),
-                radius=0.02,
-                color=(1.0, 0.0, 0.0),
-            )
-
-        renderer.end_frame()
-
-        # Save screenshot
-        renderer.save_screenshot(image_path)
-        return True
-
-    except Exception as e:
-        print(f"Could not use warp renderer: {e}")
         return False
 
 
