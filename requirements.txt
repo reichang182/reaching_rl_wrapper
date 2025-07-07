@@ -124,7 +124,7 @@ pydantic_core==2.27.2
 Pygments==2.19.1
 pyhumps==3.8.0
 pyparsing==3.2.3
-PySide2==5.15.2.1
+PySide2
 pytest==8.3.5
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
