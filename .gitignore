@@ -65,5 +65,9 @@ wheels/
 *.egg
 MANIFEST
 
+# External repositories cloned for training scripts
+bodygen/repo*/
+bodygen/co_design_task_repo/
+
 *test*.sh
 *test*.py
