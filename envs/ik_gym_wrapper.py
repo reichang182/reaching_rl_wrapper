@@ -1,10 +1,4 @@
-import os
-import sys
-
-# Add co_design_task to path
-parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+"""Gymnasium wrapper for the :mod:`co_design_task` inverse kinematics task."""
 
 import gymnasium
 import numpy as np
