@@ -20,6 +20,7 @@ from wandb.integration.sb3 import WandbCallback
 # Add parent directory to path to import from envs
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from envs.ig_gym_wrapper import IGEnv
 from envs.ik_gym_wrapper import InverseKinematicsEnv
 
 # For video rendering (optional - will skip if not available)
@@ -85,6 +86,13 @@ class EpisodeEndMetricsLogger(BaseCallback):
 parser = argparse.ArgumentParser(description="Train RL agent for inverse kinematics task.")
 parser.add_argument(
     "--algorithm", type=str, default="SAC", choices=["SAC", "PPO"], help="RL algorithm to use"
+)
+parser.add_argument(
+    "--env",
+    type=str,
+    default="ik",
+    choices=["ik", "ig"],
+    help="Environment: 'ik' for inverse kinematics, 'ig' for BodyGen-compatible",
 )
 parser.add_argument("--dof", type=int, default=3, help="Degrees of freedom for the robot")
 parser.add_argument("--num_targets", type=int, default=1, help="Number of targets")
@@ -358,7 +366,7 @@ def main():
     torch.backends.cudnn.benchmark = False
 
     # Experiment naming
-    exp_name_parts = ["ik", args.algorithm.lower(), f"dof{args.dof}"]
+    exp_name_parts = [args.env, args.algorithm.lower(), f"dof{args.dof}"]
     if args.enable_obstacles:
         exp_name_parts.append(f"obs{args.num_obstacles}")
     exp_name_parts.append(f"seed{args.seed}")
@@ -376,20 +384,35 @@ def main():
 
     # Create environment function
     def make_env(seed_val):
-        env = InverseKinematicsEnv(
-            random_seed=seed_val,
-            dof=args.dof,
-            number_of_targets=args.num_targets,
-            fps=args.fps,
-            max_episode_steps=args.max_episode_steps,
-            terminate_on_collision=args.terminate_on_collision,
-            collision_penalty=args.collision_penalty,
-            target_threshold=args.target_threshold,
-            machine_cost_weight=args.machine_cost_weight,
-            enable_obstacles=args.enable_obstacles,
-            number_of_collision_objects=args.num_obstacles,
-            stage_path=args.stage_path,
-        )
+        if args.env == "ik":
+            env = InverseKinematicsEnv(
+                random_seed=seed_val,
+                dof=args.dof,
+                number_of_targets=args.num_targets,
+                fps=args.fps,
+                max_episode_steps=args.max_episode_steps,
+                terminate_on_collision=args.terminate_on_collision,
+                collision_penalty=args.collision_penalty,
+                target_threshold=args.target_threshold,
+                machine_cost_weight=args.machine_cost_weight,
+                enable_obstacles=args.enable_obstacles,
+                number_of_collision_objects=args.num_obstacles,
+                stage_path=args.stage_path,
+            )
+        else:
+            ig_cfg = {
+                "init_links": args.dof,
+                "max_links": args.dof,
+                "min_links": max(2, args.dof - 2),
+                "base_link_length": 0.2,
+                "link_length_range": [0.1, 0.5],
+                "joint_limit_range": [-np.pi, np.pi],
+                "max_episode_steps": args.max_episode_steps,
+                "target_threshold": args.target_threshold,
+                "terminate_on_collision": args.terminate_on_collision,
+            }
+            env = IGEnv(ig_cfg, random_seed=seed_val)
+
         env = TimeLimit(env, max_episode_steps=args.max_episode_steps)
         env = Monitor(env)
         return env
