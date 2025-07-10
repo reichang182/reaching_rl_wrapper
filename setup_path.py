@@ -1,4 +1,5 @@
 """Setup Python path to include co_design_task.
+
 Import this at the beginning of scripts to ensure co_design_task is available.
 """
 
